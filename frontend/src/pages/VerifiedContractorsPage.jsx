@@ -183,7 +183,7 @@ function MapView({ contractors, onSelect, selected }) {
     return () => { cancelled = true; if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; } };
   }, []);
 
-  // Add/update markers
+  // Add/update markers with clustering support
   useEffect(() => {
     if (!mapInstance.current) return;
     const initMarkers = async () => {
@@ -191,19 +191,109 @@ function MapView({ contractors, onSelect, selected }) {
       markersRef.current.forEach(m => m.remove());
       markersRef.current = [];
 
-      contractors.forEach(c => {
-        if (!c.location?.lat || !c.location?.lng) return;
+      const map = mapInstance.current;
+
+      // Remove old cluster layers/source
+      ["clusters", "cluster-count", "unclustered-point"].forEach(id => {
+        if (map.getLayer(id)) map.removeLayer(id);
+      });
+      if (map.getSource("contractors")) map.removeSource("contractors");
+
+      // Build GeoJSON for contractors with location
+      const features = contractors
+        .filter(c => c.location?.lat && c.location?.lng)
+        .map(c => ({
+          type: "Feature",
+          properties: { id: c.id, name: c.company_name || c.name, selected: selected?.id === c.id },
+          geometry: { type: "Point", coordinates: [c.location.lng, c.location.lat] }
+        }));
+
+      if (features.length === 0) return;
+
+      // Add GeoJSON source with cluster
+      map.addSource("contractors", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features },
+        cluster: true,
+        clusterMaxZoom: 10,
+        clusterRadius: 50
+      });
+
+      // Cluster circle layer
+      map.addLayer({
+        id: "clusters",
+        type: "circle",
+        source: "contractors",
+        filter: ["has", "point_count"],
+        paint: {
+          "circle-color": "#0000FF",
+          "circle-radius": ["step", ["get", "point_count"], 20, 5, 28, 20, 36],
+          "circle-stroke-width": 3,
+          "circle-stroke-color": "#fff"
+        }
+      });
+
+      // Cluster count label
+      map.addLayer({
+        id: "cluster-count",
+        type: "symbol",
+        source: "contractors",
+        filter: ["has", "point_count"],
+        layout: { "text-field": "{point_count_abbreviated}", "text-size": 12, "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"] },
+        paint: { "text-color": "#fff" }
+      });
+
+      // Individual contractor points
+      map.addLayer({
+        id: "unclustered-point",
+        type: "circle",
+        source: "contractors",
+        filter: ["!", ["has", "point_count"]],
+        paint: {
+          "circle-color": ["case", ["==", ["get", "id"], selected?.id || ""], "#7EC8E3", "#050A30"],
+          "circle-radius": 10,
+          "circle-stroke-width": 3,
+          "circle-stroke-color": "#0000FF"
+        }
+      });
+
+      // Click cluster → zoom in
+      map.on("click", "clusters", (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ["clusters"] });
+        const clusterId = features[0]?.properties?.cluster_id;
+        if (!clusterId) return;
+        map.getSource("contractors").getClusterExpansionZoom(clusterId, (err, zoom) => {
+          if (err) return;
+          map.easeTo({ center: features[0].geometry.coordinates, zoom });
+        });
+      });
+
+      // Click individual point → show contractor
+      map.on("click", "unclustered-point", (e) => {
+        const id = e.features[0]?.properties?.id;
+        const c = contractors.find(x => x.id === id);
+        if (c) onSelect(c);
+      });
+
+      map.getCanvas().style.cursor = "pointer";
+
+      // Also add name labels for unclustered points
+      contractors.filter(c => c.location?.lat && c.location?.lng).forEach(c => {
         const el = document.createElement("div");
-        el.className = "cursor-pointer";
-        el.innerHTML = `<div style="background:${selected?.id === c.id ? '#0000FF' : '#050A30'};color:white;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;border:2px solid ${selected?.id === c.id ? '#7EC8E3' : '#0000FF'};box-shadow:0 2px 8px rgba(0,0,0,0.3)">
-          ${c.company_name || c.name}
-        </div>`;
+        el.style.cssText = `background:${selected?.id === c.id ? "#0000FF" : "#050A30"};color:white;padding:3px 8px;border-radius:12px;font-size:10px;font-weight:700;white-space:nowrap;border:1.5px solid ${selected?.id === c.id ? "#7EC8E3" : "#0000FF"};box-shadow:0 2px 6px rgba(0,0,0,0.3);margin-top:-32px;cursor:pointer`;
+        el.textContent = c.company_name || c.name;
         el.addEventListener("click", () => onSelect(c));
-        const marker = new maplibregl.Marker({ element: el }).setLngLat([c.location.lng, c.location.lat]).addTo(mapInstance.current);
+        const marker = new maplibregl.Marker({ element: el }).setLngLat([c.location.lng, c.location.lat]).addTo(map);
         markersRef.current.push(marker);
       });
     };
-    initMarkers().catch(() => {});
+
+    // Wait for map to be loaded before adding sources
+    if (mapInstance.current.loaded()) {
+      initMarkers().catch(() => {});
+    } else {
+      mapInstance.current.once("load", () => initMarkers().catch(() => {}));
+    }
   }, [contractors, selected, onSelect]);
 
   return (

@@ -1,93 +1,119 @@
-/* TheDayLaborers Service Worker v1.0 */
-const CACHE_NAME = "daylaborers-v1";
-const STATIC_ASSETS = [
-  "/",
-  "/static/js/bundle.js",
-  "/static/css/main.css",
-  "/manifest.json"
+/* TheDayLaborers Service Worker v2.0 — Offline + Push */
+const CACHE_NAME = "daylaborers-v2";
+const API_CACHE = "daylaborers-api-v2";
+
+const STATIC_ASSETS = ["/", "/manifest.json", "/offline.html"];
+
+// API routes to cache for offline browsing
+const CACHEABLE_API_PATTERNS = [
+  "/api/public/settings",
+  "/api/public/verified-contractors",
+  "/api/jobs/",
+  "/api/payments/plans"
 ];
 
-const API_CACHE = "daylaborers-api-v1";
-const API_CACHE_URLS = ["/api/public/settings", "/api/public/trades", "/api/payments/plans"];
-
-// Install: cache static assets
+// ─── Install ──────────────────────────────────────────────────────────────────
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {}))
+    caches.open(CACHE_NAME).then(cache =>
+      cache.addAll(STATIC_ASSETS).catch(() => {})
+    )
   );
   self.skipWaiting();
 });
 
-// Activate: clean old caches
+// ─── Activate ─────────────────────────────────────────────────────────────────
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== API_CACHE).map((k) => caches.delete(k)))
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.filter(k => ![CACHE_NAME, API_CACHE].includes(k)).map(k => caches.delete(k))
+      )
     )
   );
   self.clients.claim();
 });
 
-// Fetch: network-first for API, cache-first for static
+// ─── Fetch ────────────────────────────────────────────────────────────────────
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Skip non-GET requests and chrome-extension
   if (event.request.method !== "GET") return;
-  if (url.protocol === "chrome-extension:") return;
+  if (!["http:", "https:"].includes(url.protocol)) return;
 
-  // API routes: network-first, fallback to cache
+  // API routes: network-first, cache on success, fallback to cache offline
   if (url.pathname.startsWith("/api/")) {
+    const shouldCache = CACHEABLE_API_PATTERNS.some(p => url.pathname.includes(p.replace("/api/", "")));
     event.respondWith(
       fetch(event.request)
-        .then((response) => {
-          if (response.ok && API_CACHE_URLS.some((u) => url.pathname.includes(u))) {
-            const clone = response.clone();
-            caches.open(API_CACHE).then((cache) => cache.put(event.request, clone));
+        .then(res => {
+          if (res.ok && shouldCache) {
+            const clone = res.clone();
+            caches.open(API_CACHE).then(c => c.put(event.request, clone));
           }
-          return response;
+          return res;
         })
         .catch(() => caches.match(event.request))
     );
     return;
   }
 
-  // Static assets: cache-first with network fallback
+  // Static assets: stale-while-revalidate
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+    caches.match(event.request).then(cached => {
+      const network = fetch(event.request).then(res => {
+        if (res.ok) {
+          caches.open(CACHE_NAME).then(c => c.put(event.request, res.clone()));
         }
-        return response;
+        return res;
       });
+      return cached || network;
     })
   );
 });
 
-// Push Notifications
-self.addEventListener("push", (event) => {
-  let data = { title: "TheDayLaborers", body: "You have a new notification.", icon: "/logo192.png" };
+// ─── Background Sync for offline job data ────────────────────────────────────
+self.addEventListener("sync", (event) => {
+  if (event.tag === "sync-jobs") {
+    event.waitUntil(syncJobs());
+  }
+});
+
+async function syncJobs() {
   try {
-    data = event.data ? { ...data, ...event.data.json() } : data;
-  } catch (e) {}
+    const res = await fetch("/api/jobs/");
+    if (res.ok) {
+      const cache = await caches.open(API_CACHE);
+      await cache.put(new Request("/api/jobs/"), res);
+    }
+  } catch {}
+}
+
+// ─── Push Notifications ───────────────────────────────────────────────────────
+self.addEventListener("push", (event) => {
+  let data = { title: "TheDayLaborers", body: "You have a new notification.", icon: "/logo192.png", url: "/" };
+  try { if (event.data) data = { ...data, ...event.data.json() }; } catch {}
 
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
       icon: data.icon || "/logo192.png",
       badge: "/logo192.png",
-      tag: data.tag || "daylaborers",
-      data: data.url ? { url: data.url } : {}
+      tag: data.tag || "daylaborers-notification",
+      requireInteraction: false,
+      data: { url: data.url }
     })
   );
 });
 
-// Notification click
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || "/";
-  event.waitUntil(clients.openWindow(url));
+  const targetUrl = event.notification.data?.url || "/";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(windowClients => {
+      const existing = windowClients.find(c => c.url === targetUrl && "focus" in c);
+      if (existing) return existing.focus();
+      if (clients.openWindow) return clients.openWindow(targetUrl);
+    })
+  );
 });

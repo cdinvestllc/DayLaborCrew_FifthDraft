@@ -1168,6 +1168,10 @@ function CouponsTab() {
   const [coupons, setCoupons] = useState([]);
   const [form, setForm] = useState({ code: "", discount_percent: 10, usage_limit: 100, expires_at: "", plan_restriction: "" });
   const [creating, setCreating] = useState(false);
+  const [testCode, setTestCode] = useState("");
+  const [testPlan, setTestPlan] = useState("monthly");
+  const [testResult, setTestResult] = useState(null);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     axios.get(`${API}/admin/coupons`).then(r => setCoupons(r.data)).catch(() => {});
@@ -1202,54 +1206,114 @@ function CouponsTab() {
     } catch { toast.error("Failed"); }
   };
 
+  const testCoupon = async () => {
+    if (!testCode.trim()) return toast.error("Enter a coupon code to test");
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await axios.get(`${API}/payments/coupon/${testCode.toUpperCase()}?plan=${testPlan}`);
+      setTestResult({ success: true, ...res.data });
+    } catch (e) {
+      setTestResult({ success: false, error: e?.response?.data?.detail || "Invalid or expired coupon" });
+    }
+    setTesting(false);
+  };
+
   return (
     <div className="space-y-6" data-testid="coupons-tab">
-      <div className="card p-5 max-w-lg">
-        <h3 className="font-bold text-[#050A30] dark:text-white text-lg mb-4" style={{ fontFamily: "Manrope, sans-serif" }}>Create Coupon</h3>
-        <form onSubmit={createCoupon} className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Create Coupon */}
+        <div className="card p-5">
+          <h3 className="font-bold text-[#050A30] dark:text-white text-lg mb-4" style={{ fontFamily: "Manrope, sans-serif" }}>Create Coupon</h3>
+          <form onSubmit={createCoupon} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Code *</label>
+                <input required type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
+                  placeholder="SUMMER20" data-testid="coupon-code-input" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Discount % *</label>
+                <input required type="number" min="1" max="100" value={form.discount_percent} onChange={e => setForm(f => ({ ...f, discount_percent: e.target.value }))}
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
+                  data-testid="coupon-discount-input" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Usage Limit</label>
+                <input type="number" min="1" value={form.usage_limit} onChange={e => setForm(f => ({ ...f, usage_limit: e.target.value }))}
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
+                  data-testid="coupon-limit-input" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Plan (optional)</label>
+                <select value={form.plan_restriction} onChange={e => setForm(f => ({ ...f, plan_restriction: e.target.value }))}
+                  className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
+                  data-testid="coupon-plan-select">
+                  <option value="">All plans</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Code *</label>
-              <input required type="text" value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Expires At (optional)</label>
+              <input type="date" value={form.expires_at} onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
+                className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
+                data-testid="coupon-expires-input" />
+            </div>
+            <button type="submit" disabled={creating}
+              className="w-full bg-[#0000FF] text-white py-2.5 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-60"
+              data-testid="create-coupon-btn">
+              {creating ? "Creating..." : "Create Coupon"}
+            </button>
+          </form>
+        </div>
+
+        {/* Test Coupon */}
+        <div className="card p-5">
+          <h3 className="font-bold text-[#050A30] dark:text-white text-lg mb-4" style={{ fontFamily: "Manrope, sans-serif" }}>Test a Coupon</h3>
+          <p className="text-slate-500 text-xs mb-4">Preview what a coupon does before sharing it with users.</p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Coupon Code</label>
+              <input type="text" value={testCode} onChange={e => setTestCode(e.target.value.toUpperCase())}
                 className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm uppercase focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
-                placeholder="SUMMER20" data-testid="coupon-code-input" />
+                placeholder="Enter code to test..." data-testid="test-coupon-code-input" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Discount % *</label>
-              <input required type="number" min="1" max="100" value={form.discount_percent} onChange={e => setForm(f => ({ ...f, discount_percent: e.target.value }))}
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Test Against Plan</label>
+              <select value={testPlan} onChange={e => setTestPlan(e.target.value)}
                 className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
-                data-testid="coupon-discount-input" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Usage Limit</label>
-              <input type="number" min="1" value={form.usage_limit} onChange={e => setForm(f => ({ ...f, usage_limit: e.target.value }))}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
-                data-testid="coupon-limit-input" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Plan (optional)</label>
-              <select value={form.plan_restriction} onChange={e => setForm(f => ({ ...f, plan_restriction: e.target.value }))}
-                className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
-                data-testid="coupon-plan-select">
-                <option value="">All plans</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
+                data-testid="test-coupon-plan-select">
+                <option value="daily">Daily ($4.99)</option>
+                <option value="weekly">Weekly ($24.99)</option>
+                <option value="monthly">Monthly ($79.99)</option>
               </select>
             </div>
+            <button onClick={testCoupon} disabled={testing}
+              className="w-full border-2 border-[#0000FF] text-[#0000FF] py-2.5 rounded-lg font-bold hover:bg-blue-50 dark:hover:bg-blue-950 disabled:opacity-60"
+              data-testid="test-coupon-btn">
+              {testing ? "Testing..." : "Test Coupon"}
+            </button>
+            {testResult && (
+              <div className={`rounded-xl p-4 ${testResult.success ? "bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-700" : "bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-700"}`}
+                data-testid="test-coupon-result">
+                {testResult.success ? (
+                  <div className="space-y-1">
+                    <p className="font-bold text-green-700 dark:text-green-300 text-sm">Valid Coupon</p>
+                    <p className="text-green-600 dark:text-green-400 text-xs">Code: <strong>{testResult.code}</strong> — {testResult.discount_percent}% off</p>
+                    <p className="text-green-600 dark:text-green-400 text-xs">Original: <strong>${testResult.original_price}</strong> → After coupon: <strong>${testResult.final_price}</strong></p>
+                    <p className="text-green-500 dark:text-green-500 text-xs">{testResult.uses_remaining} uses remaining</p>
+                  </div>
+                ) : (
+                  <p className="font-semibold text-red-700 dark:text-red-300 text-sm">{testResult.error}</p>
+                )}
+              </div>
+            )}
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1">Expires At (optional)</label>
-            <input type="date" value={form.expires_at} onChange={e => setForm(f => ({ ...f, expires_at: e.target.value }))}
-              className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#0000FF] dark:bg-slate-800 dark:text-white"
-              data-testid="coupon-expires-input" />
-          </div>
-          <button type="submit" disabled={creating}
-            className="w-full bg-[#0000FF] text-white py-2.5 rounded-lg font-bold hover:bg-blue-700 disabled:opacity-60"
-            data-testid="create-coupon-btn">
-            {creating ? "Creating..." : "Create Coupon"}
-          </button>
-        </form>
+        </div>
       </div>
 
       <div className="card overflow-hidden">
@@ -1270,7 +1334,12 @@ function CouponsTab() {
                 <tr><td colSpan={7} className="px-4 py-6 text-center text-slate-400">No coupons yet</td></tr>
               ) : coupons.map(c => (
                 <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800">
-                  <td className="px-4 py-3 font-mono font-bold text-[#0000FF]">{c.code}</td>
+                  <td className="px-4 py-3">
+                    <span className="font-mono font-bold text-[#0000FF]">{c.code}</span>
+                    <button onClick={() => { setTestCode(c.code); toast.success(`${c.code} loaded for testing`); }}
+                      className="ml-2 text-xs text-slate-400 hover:text-[#0000FF]" title="Load for testing"
+                      data-testid={`load-test-${c.id}`}>Test</button>
+                  </td>
                   <td className="px-4 py-3 font-semibold text-emerald-600">{c.discount_percent}%</td>
                   <td className="px-4 py-3">{c.usage_count || 0}</td>
                   <td className="px-4 py-3">{c.usage_limit}</td>

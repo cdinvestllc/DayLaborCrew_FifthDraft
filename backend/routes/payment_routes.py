@@ -29,6 +29,9 @@ PLANS = {
     "monthly": {"amount": 79.99, "days": 30, "label": "Monthly Pass"},
 }
 
+# Default verified contractor fee (admin can override in settings)
+DEFAULT_VERIFIED_FEE = 39.99
+
 
 def now_str():
     return datetime.now(timezone.utc).isoformat()
@@ -480,3 +483,86 @@ async def boost_paypal_capture(order_id: str, job_id: str, current_user: dict = 
             {"$set": {"payment_status": "paid", "updated_at": now_str()}}
         )
     return {"status": result.get("status"), "order_id": order_id}
+
+
+# ─── Verified Contractor Fee (Stripe) ─────────────────────────────────────────
+
+@router.post("/verified-contractor/create-session")
+async def create_verified_contractor_session(request: Request, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "contractor":
+        raise HTTPException(status_code=403, detail="Only contractors can purchase verification")
+    if current_user.get("is_verified_contractor"):
+        raise HTTPException(status_code=400, detail="You are already a verified contractor")
+
+    # Check for existing pending transaction (prevent duplicate sessions)
+    existing = await db.payment_transactions.find_one({
+        "user_id": current_user["id"],
+        "plan": "verified_contractor",
+        "payment_status": "pending"
+    })
+
+    # Fetch admin-configured fee
+    settings = await db.settings.find_one({}, {"_id": 0})
+    fee = float((settings or {}).get("verified_contractor_fee", DEFAULT_VERIFIED_FEE))
+
+    body = await request.json()
+    origin = body.get("origin_url", str(request.base_url)).rstrip("/")
+    success_url = f"{origin}/contractor/dashboard?verified_session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/contractor/dashboard"
+
+    stripe = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{origin}/api/payments/stripe/webhook")
+    req = CheckoutSessionRequest(
+        amount=float(fee),
+        currency="usd",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"user_id": current_user["id"], "type": "verified_contractor", "payment_method": "stripe"}
+    )
+    session = await stripe.create_checkout_session(req)
+
+    tx = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "session_id": session.session_id,
+        "amount": float(fee),
+        "currency": "usd",
+        "plan": "verified_contractor",
+        "payment_method": "stripe",
+        "payment_status": "pending",
+        "created_at": now_str()
+    }
+    await db.payment_transactions.insert_one(tx)
+    return {"url": session.url, "session_id": session.session_id, "fee": fee}
+
+
+@router.get("/verified-contractor/status/{session_id}")
+async def verified_contractor_status(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    stripe = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{str(request.base_url)}api/payments/stripe/webhook")
+
+    # Idempotency check
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if tx and tx.get("payment_status") == "paid":
+        return {"status": "complete", "payment_status": "paid", "already_processed": True}
+
+    status = await stripe.get_checkout_status(session_id)
+
+    if status.payment_status == "paid":
+        user_id = status.metadata.get("user_id", current_user["id"])
+        # Grant verified status
+        await db.users.update_one(
+            {"id": user_id},
+            {"$set": {"is_verified_contractor": True, "verified_at": now_str()}}
+        )
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {"payment_status": "paid", "updated_at": now_str()}}
+        )
+
+    return {"status": status.status, "payment_status": status.payment_status}
+
+
+@router.get("/verified-contractor/fee")
+async def get_verified_fee():
+    """Public endpoint to get the current verification fee."""
+    settings = await db.settings.find_one({}, {"_id": 0})
+    return {"fee": float((settings or {}).get("verified_contractor_fee", DEFAULT_VERIFIED_FEE))}

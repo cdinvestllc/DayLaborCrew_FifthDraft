@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { useWebSocket } from "../contexts/WebSocketContext";
+import { useSearchParams } from "react-router-dom";
 import Navbar from "../components/Navbar";
 import MapComponent from "../components/MapComponent";
 import JobCard from "../components/JobCard";
@@ -9,7 +10,7 @@ import axios from "axios";
 import {
   Search, Plus, Zap, Users, Briefcase, Star, X,
   AlertTriangle, PauseCircle, XCircle, PlayCircle,
-  Navigation, Send
+  Navigation, Send, CheckCircle, Shield, Loader2
 } from "lucide-react";
 import BoostJobModal from "../components/BoostJobModal";
 import { US_STATES } from "../lib/usStates";
@@ -93,8 +94,9 @@ function OfferCrewModal({ crew, jobs, onClose }) {
 }
 
 export default function ContractorDashboard() {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
   const { addListener, connected } = useWebSocket();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [jobs, setJobs] = useState([]);
   const [crew, setCrew] = useState([]);
   const [crewSearch, setCrewSearch] = useState({ name: "", trade: "" });
@@ -106,6 +108,9 @@ export default function ContractorDashboard() {
   const [flyToCoords, setFlyToCoords] = useState(null);
   const [selectedState, setSelectedState] = useState("");
   const [boostJob, setBoostJob] = useState(null);
+  const [verifiedFee, setVerifiedFee] = useState(39.99);
+  const [verifiedLoading, setVerifiedLoading] = useState(false);
+  const [pollingVerified, setPollingVerified] = useState(false);
   const [jobForm, setJobForm] = useState({
     title: "", description: "", trade: "", crew_needed: 1,
     start_time: "", end_time: "", pay_rate: "", address: "", is_emergency: false
@@ -139,7 +144,33 @@ export default function ContractorDashboard() {
     navigator.geolocation?.getCurrentPosition(pos => {
       setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
     });
+    // Fetch verified contractor fee
+    axios.get(`${API}/payments/verified-contractor/fee`).then(r => setVerifiedFee(r.data.fee)).catch(() => {});
   }, [fetchJobs, fetchCrew]);
+
+  // Poll verified contractor payment status when redirected back
+  useEffect(() => {
+    const sessionId = searchParams.get("verified_session_id");
+    if (!sessionId) return;
+    setPollingVerified(true);
+    let attempts = 0;
+    const poll = async () => {
+      try {
+        const res = await axios.get(`${API}/payments/verified-contractor/status/${sessionId}`);
+        if (res.data.payment_status === "paid") {
+          toast.success("You are now a Verified Contractor!");
+          if (setUser) setUser(u => ({ ...u, is_verified_contractor: true }));
+          setPollingVerified(false);
+          setSearchParams({});
+          return;
+        }
+      } catch {}
+      attempts++;
+      if (attempts < 6) setTimeout(poll, 2000);
+      else { setPollingVerified(false); toast.error("Payment status unknown. Refresh and check your profile."); }
+    };
+    poll();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const remove = addListener(msg => {
@@ -155,8 +186,18 @@ export default function ContractorDashboard() {
     return remove;
   }, [addListener, fetchJobs]);
 
+  const startVerifiedCheckout = async () => {
+    setVerifiedLoading(true);
+    try {
+      const res = await axios.post(`${API}/payments/verified-contractor/create-session`, { origin_url: window.location.origin });
+      window.location.href = res.data.url;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not start checkout");
+      setVerifiedLoading(false);
+    }
+  };
+
   const createJob = async (e) => {
-    e.preventDefault();
     if (jobForm.end_time && jobForm.start_time && new Date(jobForm.end_time) <= new Date(jobForm.start_time)) {
       return toast.error("End time must be after start time");
     }
@@ -245,6 +286,47 @@ export default function ContractorDashboard() {
       {offerCrew && <OfferCrewModal crew={offerCrew} jobs={jobs} onClose={() => setOfferCrew(null)} />}
 
       <div className="max-w-[1400px] mx-auto px-4 py-4">
+
+        {/* Verified Contractor Banner */}
+        {pollingVerified && (
+          <div className="mb-4 bg-blue-50 dark:bg-blue-950 border border-[#0000FF]/30 rounded-xl p-4 flex items-center gap-3" data-testid="polling-verified-banner">
+            <Loader2 className="w-5 h-5 text-[#0000FF] animate-spin flex-shrink-0" />
+            <div>
+              <p className="font-bold text-[#050A30] dark:text-white text-sm">Confirming your payment...</p>
+              <p className="text-slate-500 text-xs">Please wait while we verify your Verified Contractor payment.</p>
+            </div>
+          </div>
+        )}
+        {!pollingVerified && user?.is_verified_contractor && (
+          <div className="mb-4 bg-green-50 dark:bg-green-950 border border-green-300 dark:border-green-700 rounded-xl p-4 flex items-center gap-3" data-testid="verified-badge-banner">
+            <CheckCircle className="w-6 h-6 text-green-500 flex-shrink-0" />
+            <div>
+              <p className="font-bold text-green-700 dark:text-green-300">You are a Verified Contractor!</p>
+              <p className="text-green-600 dark:text-green-400 text-xs">Your profile appears on the Verified Contractors page with a verified badge.</p>
+            </div>
+            <a href="/verified-contractors" target="_blank" rel="noreferrer"
+              className="ml-auto text-xs text-[#0000FF] font-bold hover:underline flex-shrink-0"
+              data-testid="view-verified-page-link">View Page</a>
+          </div>
+        )}
+        {!pollingVerified && !user?.is_verified_contractor && (
+          <div className="mb-4 bg-gradient-to-r from-[#050A30] to-[#0000FF] rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center gap-4" data-testid="get-verified-banner">
+            <div className="flex items-center gap-3 flex-1">
+              <Shield className="w-8 h-8 text-white flex-shrink-0" />
+              <div>
+                <p className="font-extrabold text-white" style={{ fontFamily: "Manrope, sans-serif" }}>Get Verified — Stand Out from the Crowd</p>
+                <p className="text-blue-200 text-xs">Pay a one-time fee to appear on the Verified Contractors page visible to homeowners and property managers.</p>
+              </div>
+            </div>
+            <button onClick={startVerifiedCheckout} disabled={verifiedLoading}
+              className="flex items-center gap-2 bg-white text-[#0000FF] px-5 py-2.5 rounded-xl font-extrabold text-sm hover:bg-blue-50 transition-colors disabled:opacity-70 flex-shrink-0"
+              data-testid="get-verified-btn">
+              {verifiedLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+              {verifiedLoading ? "Loading..." : `Get Verified — $${verifiedFee}`}
+            </button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-extrabold text-[#050A30] dark:text-white" style={{ fontFamily: "Manrope, sans-serif" }}>

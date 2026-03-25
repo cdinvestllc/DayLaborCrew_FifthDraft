@@ -186,6 +186,13 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     except Exception:
         pass
 
+    # Send push notification to contractor
+    try:
+        from utils.push_utils import send_push_notification
+        await send_push_notification(db, job["contractor_id"], "job_accepted", job_title=job.get("title", ""), crew_name=current_user["name"])
+    except Exception:
+        pass
+
     return {"message": "Job accepted", "status": new_status}
 
 
@@ -230,6 +237,12 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
                 "job_id": job_id,
                 "job_title": job["title"]
             })
+        except Exception:
+            pass
+        # Push notification
+        try:
+            from utils.push_utils import send_push_notification
+            await send_push_notification(db, job["contractor_id"], "job_completed", job_title=job.get("title", ""))
         except Exception:
             pass
 
