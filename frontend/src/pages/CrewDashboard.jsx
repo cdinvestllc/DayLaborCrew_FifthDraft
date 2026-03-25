@@ -8,11 +8,19 @@ import { toast } from "sonner";
 import axios from "axios";
 import {
   MapPin, List, Zap, Clock, RefreshCw, AlertCircle, X,
-  ToggleLeft, ToggleRight, Truck, Navigation, Share2
+  ToggleLeft, ToggleRight, Truck, Navigation, Share2, Bell, BellOff, BellRing
 } from "lucide-react";
 import { US_STATES } from "../lib/usStates";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const VAPID_PUBLIC_KEY = process.env.REACT_APP_VAPID_PUBLIC_KEY || "";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+}
 
 const TRANSPORT_OPTIONS = [
   { value: "bike", label: "Bike" },
@@ -25,6 +33,95 @@ const TRANSPORT_OPTIONS = [
 ];
 
 const DISTANCE_OPTIONS = [5, 10, 20, 50, 100];
+
+// ─── Push Notification Subscription Widget ────────────────────────────────────
+function PushNotifyWidget() {
+  const [status, setStatus] = useState("idle"); // idle | requesting | subscribed | blocked | unsupported
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      setStatus("unsupported"); return;
+    }
+    if (Notification.permission === "denied") { setStatus("blocked"); return; }
+    // Check if already subscribed
+    navigator.serviceWorker.ready.then(sw =>
+      sw.pushManager.getSubscription().then(sub => {
+        if (sub) setStatus("subscribed");
+      })
+    ).catch(() => {});
+  }, []);
+
+  const subscribe = async () => {
+    if (!VAPID_PUBLIC_KEY) { toast.error("Push notifications not configured"); return; }
+    setLoading(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm === "denied") { setStatus("blocked"); toast.error("Notifications blocked in browser settings"); setLoading(false); return; }
+      const sw = await navigator.serviceWorker.ready;
+      const sub = await sw.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+      await axios.post(`${API}/users/push/subscribe`, sub.toJSON());
+      setStatus("subscribed");
+      toast.success("Job alerts enabled! You'll be notified of new jobs.");
+    } catch (e) {
+      toast.error("Could not enable notifications: " + (e.message || String(e)));
+    }
+    setLoading(false);
+  };
+
+  const unsubscribe = async () => {
+    setLoading(true);
+    try {
+      const sw = await navigator.serviceWorker.ready;
+      const sub = await sw.pushManager.getSubscription();
+      if (sub) await sub.unsubscribe();
+      setStatus("idle");
+      toast.success("Job alerts disabled");
+    } catch {}
+    setLoading(false);
+  };
+
+  if (status === "unsupported") return null;
+
+  return (
+    <div className={`card p-4 border-2 ${status === "subscribed" ? "border-green-400 dark:border-green-600" : "border-dashed border-slate-300 dark:border-slate-600"}`}
+      data-testid="push-notify-widget">
+      <div className="flex items-center gap-2 mb-2">
+        {status === "subscribed"
+          ? <BellRing className="w-4 h-4 text-green-500" />
+          : status === "blocked"
+          ? <BellOff className="w-4 h-4 text-red-400" />
+          : <Bell className="w-4 h-4 text-[#0000FF]" />}
+        <h3 className="font-bold text-[#050A30] dark:text-white text-sm" style={{ fontFamily: "Manrope, sans-serif" }}>
+          {status === "subscribed" ? "Job Alerts On" : "Get Job Alerts"}
+        </h3>
+      </div>
+
+      {status === "subscribed" ? (
+        <>
+          <p className="text-xs text-slate-500 mb-3">You'll receive a push notification when new jobs are posted near you.</p>
+          <button onClick={unsubscribe} disabled={loading}
+            className="w-full border border-slate-300 dark:border-slate-600 rounded-lg py-2 text-xs font-semibold text-slate-500 hover:text-red-500 hover:border-red-300 transition-colors disabled:opacity-50"
+            data-testid="disable-push-btn">
+            {loading ? "Updating..." : "Turn Off Alerts"}
+          </button>
+        </>
+      ) : status === "blocked" ? (
+        <p className="text-xs text-red-500">Notifications are blocked in your browser settings. Enable them in your browser's site settings.</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 mb-3">Get instant push notifications when jobs matching your skills are posted nearby.</p>
+          <button onClick={subscribe} disabled={loading}
+            className="w-full bg-[#0000FF] text-white rounded-lg py-2 text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+            data-testid="enable-push-btn">
+            {loading ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> : <Bell className="w-3 h-3" />}
+            {loading ? "Enabling..." : "Enable Job Alerts"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function CrewDashboard() {
   const { user, refreshUser, updateUser } = useAuth();
@@ -475,6 +572,8 @@ export default function CrewDashboard() {
               </div>
               <p className="text-slate-300 text-xs text-center">Share & earn 100 points per referral</p>
             </div>
+
+            <PushNotifyWidget />
           </div>
         </div>
 

@@ -1045,10 +1045,37 @@ async def list_verified_contractors(admin: dict = Depends(require_admin), state:
 async def set_verified_contractor(user_id: str, request: Request, admin: dict = Depends(require_admin)):
     body = await request.json()
     is_verified = body.get("is_verified_contractor", True)
-    result = await db.users.update_one({"id": user_id, "role": "contractor"}, {"$set": {"is_verified_contractor": is_verified}})
-    if result.matched_count == 0:
+    revoke_note = body.get("revoke_note", "")
+
+    user = await db.users.find_one({"id": user_id, "role": "contractor"}, {"_id": 0})
+    if not user:
         raise HTTPException(status_code=404, detail="Contractor not found")
-    await log_activity(request, admin, "update_verified_contractor", target_type="user", target_id=user_id, details=f"verified={is_verified}")
+
+    update_fields: dict = {"is_verified_contractor": is_verified}
+    if not is_verified:
+        update_fields["verified_revoked_at"] = datetime.now(timezone.utc).isoformat()
+        update_fields["verified_revoke_note"] = revoke_note
+    else:
+        update_fields["verified_at"] = datetime.now(timezone.utc).isoformat()
+        update_fields.pop("verified_revoked_at", None)
+
+    await db.users.update_one({"id": user_id}, {"$set": update_fields})
+
+    # Send revocation email if being revoked
+    if not is_verified:
+        try:
+            from utils.email_utils import send_revoke_verified_email
+            await send_revoke_verified_email(
+                email=user["email"],
+                name=user["name"],
+                company_name=user.get("company_name", ""),
+                note=revoke_note
+            )
+        except Exception:
+            pass
+
+    await log_activity(request, admin, "update_verified_contractor", target_type="user", target_id=user_id,
+                       details=f"verified={is_verified}" + (f", note={revoke_note}" if revoke_note else ""))
     return {"message": "Verified status updated"}
 
 

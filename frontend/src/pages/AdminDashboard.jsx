@@ -1656,16 +1656,22 @@ function AdminMessagesTab() {
 
 function VerifiedContractorsAdminSection() {
   const [contractors, setContractors] = useState([]);
+  const [allContractors, setAllContractors] = useState([]);
   const [feeSettings, setFeeSettings] = useState({ verified_contractor_fee: 39.99, verified_page_header: "FIND VERIFIED CONTRACTORS", verified_page_tagline: "For property owners, apartments and home owners." });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [revokeTarget, setRevokeTarget] = useState(null);
+  const [revokeNote, setRevokeNote] = useState("");
+  const [revoking, setRevoking] = useState(false);
 
-  useEffect(() => {
+  const loadData = () => {
     Promise.all([
-      axios.get(`${API}/admin/verified-contractors`).then(r => setContractors(r.data)).catch(() => {}),
+      axios.get(`${API}/admin/verified-contractors`).then(r => { setContractors(r.data); setAllContractors(r.data); }).catch(() => {}),
       axios.get(`${API}/admin/settings/verified-contractor-fee`).then(r => setFeeSettings(r.data)).catch(() => {})
     ]).finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { loadData(); }, []);
 
   const saveFeeSettings = async () => {
     setSaving(true);
@@ -1676,16 +1682,74 @@ function VerifiedContractorsAdminSection() {
     setSaving(false);
   };
 
-  const toggleVerified = async (userId, currentVal) => {
+  const grantVerified = async (userId) => {
     try {
-      await axios.put(`${API}/admin/verified-contractors/${userId}`, { is_verified_contractor: !currentVal });
-      setContractors(cs => cs.map(c => c.id === userId ? { ...c, is_verified_contractor: !currentVal } : c));
-      toast.success("Updated!");
+      await axios.put(`${API}/admin/verified-contractors/${userId}`, { is_verified_contractor: true });
+      setContractors(cs => cs.map(c => c.id === userId ? { ...c, is_verified_contractor: true } : c));
+      toast.success("Verified status granted!");
     } catch { toast.error("Failed"); }
+  };
+
+  const openRevokeModal = (contractor) => {
+    setRevokeTarget(contractor);
+    setRevokeNote("");
+  };
+
+  const confirmRevoke = async () => {
+    if (!revokeTarget) return;
+    setRevoking(true);
+    try {
+      await axios.put(`${API}/admin/verified-contractors/${revokeTarget.id}`, {
+        is_verified_contractor: false,
+        revoke_note: revokeNote.trim()
+      });
+      setContractors(cs => cs.map(c => c.id === revokeTarget.id ? { ...c, is_verified_contractor: false } : c));
+      toast.success(`Verified status revoked for ${revokeTarget.company_name || revokeTarget.name}. Revocation email sent.`);
+      setRevokeTarget(null);
+      setRevokeNote("");
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to revoke"); }
+    setRevoking(false);
   };
 
   return (
     <div className="mt-6 space-y-6" data-testid="verified-contractors-admin">
+      {/* Revoke Modal */}
+      {revokeTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-md w-full p-6" data-testid="revoke-modal">
+            <h3 className="font-extrabold text-[#050A30] dark:text-white text-lg mb-2" style={{ fontFamily: "Manrope, sans-serif" }}>
+              Revoke Verified Status
+            </h3>
+            <p className="text-slate-500 text-sm mb-4">
+              Revoking verification for <strong className="text-[#050A30] dark:text-white">{revokeTarget.company_name || revokeTarget.name}</strong>. A revocation email will be sent to the contractor.
+            </p>
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">Reason / Note <span className="text-slate-400">(optional — included in email)</span></label>
+              <textarea
+                value={revokeNote}
+                onChange={e => setRevokeNote(e.target.value)}
+                rows={3}
+                placeholder="e.g. Account flagged for policy violation..."
+                className="w-full border border-slate-300 dark:border-slate-600 rounded-xl px-3 py-2.5 text-sm resize-none focus:outline-none focus:border-red-400 dark:bg-slate-800 dark:text-white"
+                data-testid="revoke-note-input"
+              />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setRevokeTarget(null); setRevokeNote(""); }}
+                className="flex-1 border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 py-2.5 rounded-xl font-bold hover:bg-slate-50 dark:hover:bg-slate-800"
+                data-testid="cancel-revoke-btn">
+                Cancel
+              </button>
+              <button onClick={confirmRevoke} disabled={revoking}
+                className="flex-1 bg-red-500 text-white py-2.5 rounded-xl font-bold hover:bg-red-600 disabled:opacity-60"
+                data-testid="confirm-revoke-btn">
+                {revoking ? "Revoking..." : "Revoke Verified"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* CMS Settings */}
       <div className="card p-6 max-w-xl">
         <h3 className="font-bold text-[#050A30] dark:text-white text-lg mb-4" style={{ fontFamily: "Manrope, sans-serif" }}>Verified Contractors Page</h3>
@@ -1720,12 +1784,12 @@ function VerifiedContractorsAdminSection() {
       {/* Verified Contractors List */}
       <div className="card p-6">
         <h3 className="font-bold text-[#050A30] dark:text-white text-lg mb-4" style={{ fontFamily: "Manrope, sans-serif" }}>
-          Verified Contractors ({contractors.filter(c => c.is_verified_contractor).length})
+          Verified Contractors ({contractors.filter(c => c.is_verified_contractor).length} of {contractors.length})
         </h3>
         {loading ? (
           <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0000FF]" /></div>
         ) : contractors.length === 0 ? (
-          <p className="text-slate-400 text-sm">No verified contractors yet. Toggle verification status on contractors below.</p>
+          <p className="text-slate-400 text-sm">No contractors yet.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1733,7 +1797,8 @@ function VerifiedContractorsAdminSection() {
                 <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Name</th>
                 <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Trade</th>
                 <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Location</th>
-                <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Verified</th>
+                <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Status</th>
+                <th className="text-left py-2 text-xs font-semibold text-slate-500 uppercase">Actions</th>
               </tr></thead>
               <tbody>
                 {contractors.map(c => (
@@ -1742,11 +1807,29 @@ function VerifiedContractorsAdminSection() {
                     <td className="py-2.5 text-slate-500">{c.trade || "—"}</td>
                     <td className="py-2.5 text-slate-500">{c.location?.city ? `${c.location.city}, ${c.location.state}` : "—"}</td>
                     <td className="py-2.5">
-                      <button onClick={() => toggleVerified(c.id, c.is_verified_contractor)}
-                        className={`px-3 py-1 rounded-full text-xs font-bold ${c.is_verified_contractor ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}
-                        data-testid={`toggle-verified-${c.id}`}>
+                      <span className={`px-2 py-1 rounded-full text-xs font-bold ${c.is_verified_contractor ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}>
                         {c.is_verified_contractor ? "Verified" : "Not Verified"}
-                      </button>
+                      </span>
+                      {c.verified_revoke_note && (
+                        <p className="text-xs text-red-400 mt-0.5 max-w-[180px] truncate" title={c.verified_revoke_note}>
+                          Note: {c.verified_revoke_note}
+                        </p>
+                      )}
+                    </td>
+                    <td className="py-2.5">
+                      {c.is_verified_contractor ? (
+                        <button onClick={() => openRevokeModal(c)}
+                          className="px-3 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
+                          data-testid={`revoke-verified-${c.id}`}>
+                          Revoke
+                        </button>
+                      ) : (
+                        <button onClick={() => grantVerified(c.id)}
+                          className="px-3 py-1 rounded-lg text-xs font-bold bg-green-50 text-green-700 hover:bg-green-100 border border-green-200 transition-colors"
+                          data-testid={`grant-verified-${c.id}`}>
+                          Grant
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

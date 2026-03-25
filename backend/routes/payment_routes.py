@@ -557,6 +557,21 @@ async def verified_contractor_status(session_id: str, request: Request, current_
             {"session_id": session_id},
             {"$set": {"payment_status": "paid", "updated_at": now_str()}}
         )
+        # Send confirmation email (fire & forget)
+        try:
+            from utils.email_utils import send_verified_contractor_email
+            paid_user = await db.users.find_one({"id": user_id}, {"_id": 0, "email": 1, "name": 1, "company_name": 1})
+            if paid_user:
+                settings = await db.settings.find_one({}, {"_id": 0})
+                fee = float((settings or {}).get("verified_contractor_fee", DEFAULT_VERIFIED_FEE))
+                await send_verified_contractor_email(
+                    email=paid_user["email"],
+                    name=paid_user["name"],
+                    company_name=paid_user.get("company_name", ""),
+                    fee=fee
+                )
+        except Exception:
+            pass
 
     return {"status": status.status, "payment_status": status.payment_status}
 
