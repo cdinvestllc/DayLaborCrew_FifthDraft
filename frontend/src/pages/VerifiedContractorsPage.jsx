@@ -152,14 +152,7 @@ function MapView({ contractors, onSelect, selected }) {
 
       const map = new maplibregl.Map({
         container: mapRef.current,
-        style: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-        center: [-98.5795, 39.8283],
-        zoom: 4
-      });
-
-      // Use raster tiles style
-      map.on("load", () => {
-        map.setStyle({
+        style: {
           version: 8,
           sources: {
             osm: {
@@ -170,7 +163,9 @@ function MapView({ contractors, onSelect, selected }) {
             }
           },
           layers: [{ id: "osm", type: "raster", source: "osm" }]
-        });
+        },
+        center: [-98.5795, 39.8283],
+        zoom: 4
       });
 
       mapInstance.current = map;
