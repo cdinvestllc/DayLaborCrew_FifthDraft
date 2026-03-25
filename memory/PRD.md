@@ -7,103 +7,79 @@ Full-stack upgrade of DayLaborCrew (communitylandscapeatlanta/DayLaborCrew_Fourt
 - **Backend**: FastAPI + MongoDB (Motor), Python 3.11
 - **Frontend**: React 19, Tailwind CSS, Craco, MapLibre GL JS
 - **Auth**: JWT-based custom auth
-- **Payments**: Stripe (Emergent integration) + PayPal (graceful fallback)
-- **PWA**: manifest.json + Service Worker v2 + Push Notifications (VAPID)
+- **Payments**: Stripe (Emergent) + PayPal graceful fallback
+- **Email**: Resend via `email_utils.py`
+- **PWA**: manifest.json + Service Worker v2 + VAPID Push
 
 ---
 
-## Session 1 – Bugs + New Features (March 25, 2026)
+## Session 1 – Bugs + New Features
+- Bug fixes (PayPal graceful fallback, admin messages archive, data-testid, coupon flow)
+- PWA (manifest.json, SW, Add to Home Screen prompt)
+- App Settings page (sound/vibration/push/analytics toggles)
+- Verified Contractors page (MapLibre + clustering, list/map, admin CMS)
+- "Our App" page linking to JobStack
 
-### Bug Fixes
-- **PayPal SDK error**: Added `PAYPAL_VALID` check — shows friendly "PayPal Unavailable" UI if client ID starts with `re_` or `sk_`
-- **Coupon validation**: Confirmed working — updates `couponResult.final_price` in state
-- **Public profile API**: Route `/api/users/public/{user_id}` confirmed working
-- **Admin Messages Archived**: Full archive/unarchive/delete flow. Toggle switches Active ↔ Archived
-- **data-testid**: Changed `view-crew-profile-{id}` → `view-profile-crew-{id}` on ContractorDashboard sidebar
+## Session 2 – P1/P2 Backlog
+- Stripe Verified Contractor Checkout ($39.99 one-time, idempotent)
+- Admin Coupon Test UI (preview discount before sharing)
+- VAPID Push notifications hooked into job_accepted + job_completed
+- MapLibre GeoJSON cluster source (50+ pins)
+- Service Worker v2 (background sync, stale-while-revalidate)
 
-### PWA
-- `public/manifest.json`: Full PWA manifest (icons, theme, display mode)
-- `public/sw.js` v2: cache-first static + network-first API + background sync + Push Notification handler
-- `public/index.html`: theme-color, apple-mobile meta, manifest link, SW registration
-- `PWAInstallPrompt.jsx`: beforeinstallprompt banner with Install/Later
+## Session 3 – Next Action Items (March 25, 2026)
 
-### App Settings (`/settings/app`)
-- Sound Alerts + Test Sound (Web Audio API)
-- Vibration Alerts (mobile only check)
-- Browser Notifications + Push Notifications (VAPID subscribe)
-- Alert Types per role (jobCompleted, jobAccepted, jobDeclined)
-- Analytics Privacy toggle
-- Persisted to `/api/users/preferences`
+### P1: Verified Contractor Confirmation Email
+- Added `send_verified_contractor_email(email, name, company_name, fee)` to `email_utils.py`
+- Called in `payment_routes.py` → `verified_contractor_status()` when `payment_status == "paid"` (fire-and-forget, no blocking)
+- Branded HTML email: congratulations, explains verified benefits, links to /verified-contractors page
 
-### Verified Contractors Feature
-- **New page**: `/verified-contractors` (public, no auth)
-- State + Trade filters; List and Map views
-- MapLibre GL + OpenStreetMap tiles; GeoJSON cluster source (cluster:true, radius 50)
-- Sidebar with full contractor profile + portfolio
-- Landing page buttons: "Find Verified Contractors" + "Our App"
-- **Admin**: fee/header/tagline CMS, toggle verified per contractor
-- **Backend**: public + admin endpoints; `is_verified_contractor` field
+### P1: Crew Dashboard Push Notification Subscribe
+- `PushNotifyWidget` component added directly above the default export in `CrewDashboard.jsx`
+- Reads existing SW subscription state on mount (checks `pushManager.getSubscription()`)
+- Three states: idle (enable button), subscribed (disable button), blocked (help text)
+- On subscribe: requests browser permission → subscribes via SW → posts to `/api/users/push/subscribe`
+- Renders in the right sidebar as a card (`data-testid="push-notify-widget"`)
 
-### "Our App" Page (`/our-app`)
-- Hero + JobStack link + PWA install guide + 4 feature cards
+### P2: Admin Revoke Verified Flow
+- `VerifiedContractorsAdminSection` redesigned with **Revoke** / **Grant** action buttons
+- Revoke opens a modal (`data-testid="revoke-modal"`) with a textarea for an optional revocation reason
+- On confirm: `PUT /api/admin/verified-contractors/{id}` with `{is_verified_contractor: false, revoke_note: "..."}` 
+- Backend stores `verified_revoked_at` and `verified_revoke_note` on user document
+- Revocation email `send_revoke_verified_email(email, name, company_name, note)` sent automatically
+- Revoke note shown in admin table under contractor's status
 
----
-
-## Session 2 – P1/P2 Backlog (March 25, 2026)
-
-### Stripe Verified Contractor Checkout
-- `POST /api/payments/verified-contractor/create-session` — creates Stripe session for configured fee
-- `GET /api/payments/verified-contractor/status/{session_id}` — polls + grants `is_verified_contractor: true`
-- `GET /api/payments/verified-contractor/fee` — public fee endpoint
-- ContractorDashboard: gradient "Get Verified — $39.99" CTA banner; polling on return from Stripe; shows green verified badge when paid
-- Idempotent: duplicate paid sessions not processed twice
-
-### Admin Coupon Test UI
-- New "Test a Coupon" panel alongside Create Coupon in Admin → Coupons tab
-- Enter any code + plan → previews original price, discounted price, uses remaining
-- "Test" shortcut button on each coupon row
-
-### Push Notification Delivery (VAPID)
-- `utils/push_utils.py`: pywebpush sender with expired subscription cleanup
-- Hooked into `job_accepted` and `job_completed` job events
-- VAPID keys stored in backend `.env`; frontend subscribes via `/api/users/push/subscribe`
-
-### MapLibre Marker Clustering
-- GeoJSON cluster source: `cluster:true, clusterMaxZoom:10, clusterRadius:50`
-- Circle layer for clusters + count label layer + unclustered points layer
-- Click cluster → zoom in; click point → open sidebar
-
-### Service Worker v2
-- Improved stale-while-revalidate for static assets
-- Background Sync tag `sync-jobs` for offline job data refresh
-- Push notification click opens correct route
+### Code Quality Fixes
+- Fixed `list_users` admin role filter: when `role` param is passed and admin is `"admin"`, role filter is preserved (no longer overwritten to `{$ne: super_admin}`)
 
 ---
 
 ## Test Results
-- **Iteration 1**: 95% (minor MapLibre style init — fixed)
-- **Iteration 2**: 100% (all P1/P2 features passing)
+- Iteration 1: 95% → fixed → 100%
+- Iteration 2: 100%
+- Iteration 3: 100% (6/6 backend, all frontend)
 
 ---
 
 ## Credentials
 - Admin: admin@thedaylaborers.com / Admin@123
 - Super Admin: superadmin@thedaylaborers.com / SuperAdmin@123
-- Test Contractors: contractor1-3@test.com / Test@1234
+- Contractor 1-3: contractor1-3@test.com / Test@1234
+- Crew: testcrew@thedaylaborers.com / Crew@1234
 - Test Coupon: `TEST20` (20% off all plans)
 
 ---
 
 ## Prioritized Backlog
 
-### P0 (Done)
-All bug fixes, PWA, app settings, verified contractors, our app, verified checkout, coupon test UI, push notifications, map clustering
+### P0 (All Done)
+Everything from Sessions 1-3 complete and tested.
 
 ### P1 (Next)
-- Email notification when contractor gets verified (confirmation email)
-- Crew dashboard push notification subscription flow
+- Verified Contractor "Spotlight" weekly email to homeowners (high conversion)
+- Crew push notification for newly posted jobs near their location
 
 ### P2 (Future)
-- Verified Contractor renewal/expiry option (admin-toggleable)
-- MapLibre satellite/terrain tile toggle
-- Analytics dashboard for verified contractor page views
+- Verified contractor analytics (page views, profile clicks in admin)
+- MapLibre satellite/terrain tile toggle on verified contractors page
+- Bulk revoke/grant verified status (admin select all)

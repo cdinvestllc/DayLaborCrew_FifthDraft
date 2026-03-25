@@ -140,7 +140,10 @@ async def list_users(
 
     # Admins can see all users including other admins (but super_admin is hidden from regular admins)
     if admin["role"] == "admin":
-        query["role"] = {"$ne": "super_admin"}
+        if role and role != "super_admin":
+            query["role"] = role  # specific role filter already excludes super_admin implicitly
+        else:
+            query["role"] = {"$ne": "super_admin"}
 
     skip = (page - 1) * limit
     users = await db.users.find(query, {"_id": 0, "password_hash": 0}).skip(skip).limit(limit).to_list(limit)
